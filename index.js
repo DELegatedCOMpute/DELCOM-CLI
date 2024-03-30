@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises';
 import dotenv from 'dotenv';
-import fs from 'node:fs/promises';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {io} from 'socket.io-client';
@@ -27,8 +28,7 @@ const helper = ()=>{
 \tn new:   \tCreate a new job\n\
 \tc clear: \tClear the console\n\
 Status:\n\
-\tCurrently in network:\t${config.joined}\n\
-\tCurrently working job:\t${config.working}\n\
+\tCurrently in worker network:\t${config.joined}\n\
 `;
 };
 
@@ -41,7 +41,7 @@ const socket = io(addr);
 
 socket.on('connect', async () => {
   console.log('connected');
-  while (true) {
+  while (!socket.disconnected) {
     const input = await rl.question(helper());
     if (input == 'j' || input == 'join') {
       config.joined = true;
@@ -50,7 +50,8 @@ socket.on('connect', async () => {
       config.joined = false;
       socket.emit('leave');
     } else if (input == 'q' || input == 'quit') {
-      quitApp();
+      socket.close();
+      rl.close();
     } else if (input == 'n' || input == 'new') {
       const filePaths = [];
       let filePath;
@@ -58,7 +59,7 @@ socket.on('connect', async () => {
       while (!lstat || !lstat.isFile() || !filePath.endsWith('Dockerfile')) {
         filePath = await rl.question('Please input dockerfile location: ');
         try {
-          lstat = await fs.lstat(filePath);
+          lstat = await fsp.lstat(filePath);
         } catch (err) {
           console.error(`No such file or directory: ${filePath}`);
         }
@@ -71,7 +72,7 @@ socket.on('connect', async () => {
         filePath = await rl.question('Input dependency file location ' +
                                      '[or blank to continue]: ');
         try {
-          lstat = await fs.lstat(filePath);
+          lstat = await fsp.lstat(filePath);
           if (lstat.isFile()) {
             filePaths.push(filePath);
           } else {
@@ -86,17 +87,40 @@ socket.on('connect', async () => {
       try {
         const filePromises = filePaths.map(async (filePath) => {
           const name = path.basename(filePath);
-          const data = await fs.readFile(filePath, {encoding: 'base64'});
+          const data = await fsp.readFile(filePath, {encoding: 'base64'});
           return {name, data};
         });
         const files = await Promise.all(Object.values(filePromises));
-        console.log(files);
         const {res, err} = await socket.emitWithAck('new_job', {files});
         if (err) {
-          console.log(err);
-          return;
+          console.error(err);
+          continue;
         }
-        console.log(res);
+        const delcomPath = path.join(os.tmpdir(), 'DELCOM');
+        if (!fs.existsSync(delcomPath)) {
+          await fsp.mkdir(delcomPath);
+        }
+        const workingDir = await fsp.mkdtemp(`${delcomPath}${path.sep}res`);
+        const resPromises = [
+          fsp.writeFile(
+              `${workingDir}${path.sep}run.stdout`,
+              res.run.stdout,
+          ),
+          fsp.writeFile(
+              `${workingDir}${path.sep}run.stderr`,
+              res.run.stderr,
+          ),
+          fsp.writeFile(
+              `${workingDir}${path.sep}build.stdout`,
+              res.build.stdout,
+          ),
+          fsp.writeFile(
+              `${workingDir}${path.sep}build.stderr`,
+              res.build.stderr,
+          ),
+        ];
+        await Promise.all(resPromises);
+        console.log(`Job finished! Results stored in ${workingDir}`);
       } catch (err) {
         console.error(err);
         console.error('failed to emit files');
@@ -120,20 +144,20 @@ socket.on('job', async (job, callback) => {
     },
   };
   try {
-    // await fs.mkdir(path.join(os.tmpdir(), 'DELCOM'));
-    const workingDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), `DELCOM${path.sep}job`),
-    );
+    const delcomPath = path.join(os.tmpdir(), 'DELCOM');
+    if (!fs.existsSync(delcomPath)) {
+      await fsp.mkdir(delcomPath);
+    }
+    const workingDir = await fsp.mkdtemp(`${delcomPath}${path.sep}job`);
     const dockerName = path.basename(workingDir).toLowerCase();
-    console.log({working_dir: workingDir});
+    console.info(`Created job directory: ${workingDir}`);
     for (const fileInfo of job.files) {
-      fs.writeFile(
+      fsp.writeFile(
           `${workingDir}${path.sep}${fileInfo.name}`,
           fileInfo.data,
           {encoding: 'base64'},
       );
     }
-
     const build = spawn(
         'docker',
         ['build', `-t${dockerName}`, '--progress=plain', workingDir],
@@ -145,9 +169,9 @@ socket.on('job', async (job, callback) => {
       out.build.stderr = out.build.stderr + chunk.toString();
     });
     build.on('close', async (code) => {
-      console.log(`\nBuild closed with code ${code}\n`);
+      console.error(`\nBuild closed with code ${code}\n`);
       if (code) {
-        callback({res: out, err: undefined});
+        callback({res: out, err: `Build closed with code ${code}`});
         return;
       }
       const run = spawn('docker', ['run', dockerName]);
@@ -162,6 +186,7 @@ socket.on('job', async (job, callback) => {
       });
     });
   } catch (err) {
+    console.error(err);
     callback({res: out, err: err});
   } finally {
     config.working = false;
