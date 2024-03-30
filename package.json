@@ -1,0 +1,23 @@
+{
+  "name": "delcomcli",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "DELCOM cli interface",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "start:dev": "node --watch index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-config-google": "^0.14.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ip": "^2.0.1",
+    "socket.io-client": "^4.7.5"
+  }
+}
