@@ -191,6 +191,7 @@ socket.on('job', async (job, callback) => {
     console.error(err);
     callback({res: out, err: err});
   } finally {
+    // TODO not true at all lol, need to promisify stuff
     config.isWorking = false;
     socket.emit('done');
     console.log('Done running job!');
