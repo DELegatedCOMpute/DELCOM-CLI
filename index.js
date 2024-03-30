@@ -10,8 +10,8 @@ import {spawn} from 'child_process';
 dotenv.config();
 
 const config = {
-  joined: false,
-  working: false,
+  isWorker: false,
+  isWorking: false,
 };
 
 const rl = readline.createInterface({
@@ -28,7 +28,7 @@ const helper = ()=>{
 \tn new:   \tCreate a new job\n\
 \tc clear: \tClear the console\n\
 Status:\n\
-\tCurrently in worker network:\t${config.joined}\n\
+\tCurrently in worker network:\t${config.isWorker}\n\
 `;
 };
 
@@ -44,10 +44,10 @@ socket.on('connect', async () => {
   while (!socket.disconnected) {
     const input = await rl.question(helper());
     if (input == 'j' || input == 'join') {
-      config.joined = true;
+      config.isWorker = true;
       socket.emit('join');
     } else if (input == 'l' || input == 'leave') {
-      config.joined = false;
+      config.isWorker = false;
       socket.emit('leave');
     } else if (input == 'q' || input == 'quit') {
       socket.close();
@@ -120,7 +120,7 @@ socket.on('connect', async () => {
           ),
         ];
         await Promise.all(resPromises);
-        console.log(`Job finished! Results stored in ${workingDir}`);
+        console.log(`\n\nJob finished! Results stored in ${workingDir}`);
       } catch (err) {
         console.error(err);
         console.error('failed to emit files');
@@ -132,7 +132,9 @@ socket.on('connect', async () => {
 });
 
 socket.on('job', async (job, callback) => {
-  config.working = true;
+  console.log('Received job...');
+  config.isWorking = true;
+  socket.emit('working');
   const out = {
     build: {
       stdout: '',
@@ -189,8 +191,14 @@ socket.on('job', async (job, callback) => {
     console.error(err);
     callback({res: out, err: err});
   } finally {
-    config.working = false;
+    config.isWorking = false;
+    socket.emit('done');
+    console.log('Done running job!');
   }
+});
+
+socket.on('status_check', (callback) => {
+  callback(config);
 });
 
 socket.on('disconnect', (reason) => {
