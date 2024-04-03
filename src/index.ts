@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {io} from 'socket.io-client';
+import {io, Socket} from 'socket.io-client';
 import {spawn} from 'child_process';
 
 const outputNames = [
@@ -14,28 +14,41 @@ const outputNames = [
   'run_std_err',
 ];
 
-// function getRandElement<T>(arr:T[]) {
-const getRandElement = (arr) => {
+type clientListElement = {
+  id: string,
+}
+
+function getRandElement<T>(arr:T[]) {
   if (arr.length == 0) {
     return undefined;
   }
   return arr[Math.floor(Math.random() * arr.length)];
 };
 
-const delcomPath = path.join(os.tmpdir(), 'DELCOM');
-if (!fs.existsSync(delcomPath)) {
-  console.warn(`${delcomPath} not detected, making...`);
-  await fsp.mkdir(delcomPath);
-}
-
 dotenv.config();
 
-const config = {
+type jobInfoType = {
+  dir: string,
+  writeStreams: {[key: string]: fs.WriteStream},
+};
+
+type resultInfoType = {
+  dir: string,
+  writeStreams: {[key: string]: fs.WriteStream}
+}
+
+type configType = {
+  isWorking: boolean,
+  isWorker: boolean,
+  id?: string,
+  job?: jobInfoType,
+  res?: resultInfoType
+}
+
+const config : configType = {
   isWorking: false, // update before async
-  jobDir: undefined, // location of Dockerfiles and dependencies
-  jobWriteStreams: {},
-  resultDir: undefined, // location of the output of a dispatched job
-  resultWriteStreams: {},
+  isWorker: false, // if registered as worker
+  id: undefined
 };
 
 const rl = readline.createInterface({
@@ -56,6 +69,12 @@ Status:\n\
 `;
 };
 
+const delcomPath = path.join(os.tmpdir(), 'DELCOM');
+if (!fs.existsSync(delcomPath)) {
+  console.warn(`${delcomPath} not detected, making...`);
+  await fsp.mkdir(delcomPath);
+}
+
 const ip = process.env.IP || await rl.question('Connection ip:');
 // 0 is falsy, can't parse undefined
 const port = parseInt(process.env.PORT || '0') ||
@@ -63,165 +82,153 @@ const port = parseInt(process.env.PORT || '0') ||
 const addr = `http://${ip}:${port}`;
 const socket = io(addr);
 
-const setupResDir = async (dir) => {
+async function setupResDir(dir?: string) {
+  if (config.res) {
+    return Error("Result directory exists!");
+  }
   if (!dir) {
     dir = await fsp.mkdtemp(`${delcomPath}${path.sep}res`);
   }
-  config.resultDir = dir;
+  config.res = {
+    dir,
+    writeStreams: {},
+  };
   for (const outputName of outputNames) {
-    config.resultWriteStreams[outputName] = fs.createWriteStream(
-        `${config.resultDir}${path.sep}${outputName}`,
+    config.res.writeStreams[outputName] = fs.createWriteStream(
+        `${config.res.dir}${path.sep}${outputName}`,
     );
   }
 };
 
-const sendFiles = async (filePaths) => {
-  try {
-    const fileClosedPromises = filePaths.map(async (filePath) => {
-      const name = path.basename(filePath);
-      const readStream = fs.createReadStream(filePath, {encoding: 'base64'});
-      readStream.on('data', async (chunk) => {
-        await socket.emitWithAck('send_file_data', {name, chunk});
-      });
-      return new Promise((resolve, reject) => {
-        readStream.on('close', () => {
-          if (readStream.errored) {
-            reject(Error `readStream for ${name} errored`);
-          }
-          resolve();
-        });
+async function sendFiles (socket: Socket, filePaths: string[]) {
+  return filePaths.map(async (filePath) => {
+    const name = path.basename(filePath);
+    const readStream = fs.createReadStream(filePath, {encoding: 'base64'});
+    readStream.on('data', async (chunk) => {
+      await socket.emitWithAck('send_file_data', {name, chunk});
+    });
+    return new Promise<void>((resolve, reject) => {
+      readStream.on('close', () => {
+        if (readStream.errored) {
+          reject(Error(`readStream for ${name} errored`));
+        }
+        console.log('files done sending');
+        socket.emit('files_done_sending');
+        resolve();
       });
     });
-    await Promise.all(fileClosedPromises);
-    console.log('files done sending');
-    socket.emit('files_done_sending');
-  } catch (err) {
-    // TODO reset config state on error
-    console.error('Failed to send files');
-    console.error(err);
-  }
+  });
 };
 
-socket.on('receive_file_data', async ({name, chunk}) => {
-  try {
-    console.log(`Writing ${chunk} to ${
-      config.jobDir}${path.sep}${name}`);
-    await fs.createWriteStream(
-        `${config.jobDir}${path.sep}${name}`,
-        {encoding: 'base64'},
-    ).write(chunk);
-  } catch (err) {
-    // TODO handle
-    console.error('Failed to receive files');
-    console.error(err);
+socket.on('receive_file_data', ({name, chunk}) => {
+  if (!config.job) {
+    return Error('No job setup to write to!');
   }
+  console.log(`Writing ${chunk} to ${config.job}${path.sep}${name}`);
+  fs.createWriteStream(
+      `${config.job.dir}${path.sep}${name}`,
+      {encoding: 'base64'},
+  ).write(chunk);
 });
 
 for (const outputName of outputNames) {
   socket.on(outputName, async (chunk) => {
-    try {
-      console.log(outputName, chunk);
-      const ws = config.resultWriteStreams[outputName];
-      if (!ws) {
-        console.error(`No write stream for ${outputName}!`);
-        return;
-      }
-      if (ws instanceof fs.WriteStream) {
-        ws.write(chunk);
-      }
-    } catch (err) {
-      // TODO handle
+    if (!config.res) {
+      return Error('No res setup to write to!')
     }
+    console.log(outputName, chunk);
+    const ws = config.res.writeStreams[outputName];
+    if (!ws) {
+      console.error(`No write stream for ${outputName}!`);
+      return;
+    }
+    ws.write(chunk);
   });
 }
 
-const build = async () => {
-  return new Promise(async (res, rej) => {
-    try {
-      // const writeStreamClose = Object.values(config.jobWriteStreams)
-      //     .map(async (ws) => {
-      //       await promisify(ws.end)();
-      //     });
-      // await Promise.all(writeStreamClose);
-      console.log(config.jobWriteStreams);
-      const workingDir = config.jobDir;
-      const dockerName = path.basename(workingDir).toLowerCase();
-      const build = spawn(
-          'docker',
-          ['build', `-t${dockerName}`, '--progress=plain', workingDir],
-      );
-      build.stdout.on('data', (chunk) => {
-        socket.emit('build_std_out', chunk);
-      });
-      build.stderr.on('data', (chunk) => {
-        socket.emit('build_std_err', chunk);
-      });
-      build.on('close', (code) => {
-        if (code) {
-          rej(Error `Build failed with code ${code}`);
-        } else {
-          res({workingDir, dockerName});
-        }
-      });
-    } catch (err) {
-      console.log(err);
-      rej(err);
+async function build() {
+  return new Promise<void>(async (res, rej) => {
+    if (!config.job?.dir) {
+      rej('No job dir to build from!');
+      return;
     }
+    console.log(config.job.writeStreams);
+    const workingDir = config.job.dir;
+    const dockerName = path.basename(workingDir).toLowerCase();
+    const build = spawn(
+        'docker',
+        ['build', `-t${dockerName}`, '--progress=plain', workingDir],
+    );
+    build.stdout.on('data', (chunk) => {
+      socket.emit('build_std_out', chunk);
+    });
+    build.stderr.on('data', (chunk) => {
+      socket.emit('build_std_err', chunk);
+    });
+    build.on('close', (code) => {
+      if (code) {
+        rej(`Build failed with code ${code}`);
+      } else {
+        res();
+      }
+    });
   });
 };
 
-const run = async () => {
-  return new Promise((res, rej) => {
-    try {
-      const dockerName = path.basename(workingDir).toLowerCase();
-      const build = spawn(
-          'docker',
-          ['run', dockerName],
-      );
-      build.stdout.on('data', (chunk) => {
-        socket.emit('run_std_out', chunk);
-      });
-      build.stderr.on('data', (chunk) => {
-        socket.emit('run_std_err', chunk);
-      });
-      build.on('close', (code) => {
-        if (code) {
-          rej(Error `Runtime failed with code ${code}`);
-        } else {
-          res();
-        }
-      });
-    } catch (err) {
-      rej(err);
+function run() {
+  return new Promise<void>((res, rej) => {
+    if (!config.job?.dir) {
+      rej('No job dir to build from!');
+      return;
     }
+    const workingDir = config.job.dir;
+    const dockerName = path.basename(workingDir).toLowerCase();
+    const build = spawn(
+        'docker',
+        ['run', dockerName],
+    );
+    build.stdout.on('data', (chunk) => {
+      socket.emit('run_std_out', chunk);
+    });
+    build.stderr.on('data', (chunk) => {
+      socket.emit('run_std_err', chunk);
+    });
+    build.on('close', (code) => {
+      if (code) {
+        rej(`Runtime failed with code ${code}`);
+      } else {
+        res();
+      }
+    });
   });
 };
 
 socket.on('start', async () => {
-  try {
-    console.log(`starting job ${config.jobDir}`);
-    await build();
-    console.log('built job, running');
-    await run();
-    console.log('finished job');
-    socket.emit('done');
-  } catch (err) {
-    // TODO handle err
+  if (!config.job) {
+    return Error("No job to start!");
   }
+  console.log(`starting job ${config.job.dir}`);
+  await build();
+  console.log('built job, running');
+  await run();
+  console.log('finished job');
+  socket.emit('done');
 });
 
 socket.on('finished', () => {
-  // TODO
-  console.log(`Job completed! Files are at ${config.resultDir}`);
+  if (!config.res) {
+    return Error("Job finished with no results! (impossible?)");
+  }
+  console.log(`Job completed! Files are at ${config.res.dir}`);
   config.isWorking = false;
-  config.resultDir = undefined;
+  config.res = undefined;
 });
 
-const askForFilePaths = async () => {
+async function askForFilePaths() {
   const filePaths = [];
   let filePath;
   let lstat;
-  while (!lstat || !lstat.isFile() || !filePath.endsWith('Dockerfile')) {
+  while (!lstat || !lstat.isFile() || !filePath?.endsWith('Dockerfile')) {
     filePath = await rl.question('Please input dockerfile location: ');
     try {
       lstat = await fsp.lstat(filePath);
@@ -268,13 +275,16 @@ socket.on('connect', async () => {
     } else if (input == 'n' || input == 'new') {
       try {
         await setupResDir();
-        const workers = await socket.emitWithAck('get_workers');
+        const workers : clientListElement[] = await socket.emitWithAck('get_workers');
         const worker = getRandElement(workers);
-        console.log(worker);
+        if (!worker) {
+          console.warn('Unable to choose worker!');
+          continue;
+        }
         const req = await socket.emitWithAck('request_worker', worker.id);
         if (!req?.err) {
           const filePaths = await askForFilePaths();
-          await sendFiles(filePaths);
+          await sendFiles(socket, filePaths);
         } else {
           console.log(req?.err);
         }
@@ -289,24 +299,22 @@ socket.on('connect', async () => {
 });
 
 socket.on('new_job', async (callback) => {
-  try {
-    console.log('Job requested, preparing...');
-    if (config.isWorking) {
-      console.warn('Job request rejected, aborting');
-      callback({err: 'Already working'});
-      return;
-    }
-    config.isWorking = true;
-    config.jobDir = await fsp.mkdtemp(`${delcomPath}${path.sep}job`);
-    console.log(`Job files will be stored at ${config.jobDir}`);
-    callback({});
-  } catch (err) {
-    config.isWorking = false;
-    config.jobDir = undefined;
-    console.error('Error when setting up new job');
-    console.error(err);
-    callback({err: 'Failed to make directory'});
+  if (config.job) {
+    return Error('No job dir on new j!');
   }
+  console.log('Job requested, preparing...');
+  if (config.isWorking) {
+    console.warn('Job request rejected, aborting');
+    callback({err: 'Already working'});
+    return;
+  }
+  config.isWorking = true;
+  config.job = {
+    dir: await fsp.mkdtemp(`${delcomPath}${path.sep}job`),
+    writeStreams: {},
+  };
+  console.log(`Job files will be stored at ${config.job.dir}`);
+  callback({});
 });
 
 socket.on('get_config', (callback) => {
