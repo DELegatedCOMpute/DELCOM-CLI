@@ -6,8 +6,6 @@ import path from 'node:path';
 import os from 'node:os';
 import {io} from 'socket.io-client';
 import {spawn} from 'child_process';
-import {promisify} from 'node:util';
-// import {exit} from 'node:process';
 
 const outputNames = [
   'build_std_out',
