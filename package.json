@@ -4,20 +4,29 @@
   "type": "module",
   "private": true,
   "description": "DELCOM cli interface",
-  "main": "index.js",
+  "main": "build/index.js",
   "scripts": {
-    "start": "node index.js",
-    "start:dev": "node --watch index.js"
+    "build": "rimraf ./build && tsc",
+    "start": "npm run build && node build/index.js",
+    "start:dev": "tsx watch src/index.ts"
   },
   "author": "",
   "license": "ISC",
-  "devDependencies": {
-    "eslint": "^8.57.0",
-    "eslint-config-google": "^0.14.0"
-  },
   "dependencies": {
+    "delcom-client": "github:DELegatedCOMpute/DELCOM-Client",
     "dotenv": "^16.4.5",
     "ip": "^2.0.1",
+    "is-ip": "^5.0.1",
     "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@stylistic/eslint-plugin-ts": "^1.7.0",
+    "@types/node": "^20.12.3",
+    "@typescript-eslint/eslint-plugin": "^7.5.0",
+    "@typescript-eslint/parser": "^7.5.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^7.5.0"
   }
 }
