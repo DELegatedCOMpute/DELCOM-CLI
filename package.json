@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "description": "DELCOM cli interface",
-  "main": "src/index.ts",
+  "main": "build/index.js",
   "scripts": {
     "build": "rimraf ./build && tsc",
     "start": "npm run build && node build/index.js",
@@ -13,8 +13,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "delcom-client": "github:DELegatedCOMpute/DELCOM-Client",
     "dotenv": "^16.4.5",
     "ip": "^2.0.1",
+    "is-ip": "^5.0.1",
     "socket.io-client": "^4.7.5"
   },
   "devDependencies": {
@@ -23,8 +25,8 @@
     "@typescript-eslint/eslint-plugin": "^7.5.0",
     "@typescript-eslint/parser": "^7.5.0",
     "eslint": "^8.57.0",
-    "tsx": "^4.7.1",
-    "typescript": "^5.4.3",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5",
     "typescript-eslint": "^7.5.0"
   }
 }

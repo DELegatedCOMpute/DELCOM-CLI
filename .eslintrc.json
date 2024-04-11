@@ -34,7 +34,7 @@
         "array-callback-return": "warn",
         "no-await-in-loop": "warn",
         "dot-notation": "warn",
-        "semi": "error",
+        "semi": ["error", "always"],
         "comma-dangle": ["warn", "always-multiline"]
     }
 }
