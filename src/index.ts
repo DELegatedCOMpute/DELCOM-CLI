@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import {isIPv4} from 'is-ip';
 import { exit } from 'node:process';
 
-function getRandElement<T>(arr:T[]) {
+function getRandElement<T>(arr:T[]): T | undefined {
   if (arr.length == 0) {
     return undefined;
   }
@@ -63,6 +63,7 @@ while (true) {
       await client.joinWorkforce();
       console.log('Left Worker Pool!');
     } else if (input == 'q' || input == 'quit') {
+      client.quit();
       rl.close();
       exit();
     } else if (input == 'n' || input == 'new') {
