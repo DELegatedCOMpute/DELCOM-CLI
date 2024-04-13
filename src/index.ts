@@ -37,7 +37,7 @@ while (!ip || !isIPv4(ip)) {
   ip = await rl.question('Please input a valid IP');
 }
 
-while (port < 0 || port > 65535) {
+while (port <= 0 || port > 65535) {
   try {
     port = parseInt(await rl.question('Please input a valid port'));
   } catch (err) {
@@ -46,7 +46,7 @@ while (port < 0 || port > 65535) {
 }
 
 console.log('Connecting...');
-const client = new Client(ip, port);
+const client = new Client(ip, port, {timeout: 60000});
 await client.init();
 console.log('Connected!');
 
