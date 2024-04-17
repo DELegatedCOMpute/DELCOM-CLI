@@ -202,9 +202,7 @@ if (values.interactive) {
         throw Error('No workers!');
       }
       console.log(workers);
-      let target = await rl.question(
-        'Input a workerID from above (or blank for random): '
-      );
+      let target;
       if (!target) {
         target =
           getRandElement(
@@ -232,4 +230,5 @@ if (values.interactive) {
     }
   }
   client.quit();
+  exit();
 }
