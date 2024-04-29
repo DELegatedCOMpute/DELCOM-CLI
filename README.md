@@ -11,3 +11,5 @@ To run, `npm run start -- -[ijf]`
 `npm run start -- -j`: Start and join as worker
 
 `npm run start -- -f <filePath>`: Start at job with file paths after '-f'. Multiple files need multiple '-f's.
+
+For sample files, try the `Dockerfile` and `my_prog.py` from DemoFiles/python-hello-world
